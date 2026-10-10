@@ -73,6 +73,13 @@ function detailLine(label, value) {
   const p = document.createElement('p'); const b = document.createElement('strong'); b.textContent = label;
   p.append(b, document.createTextNode(value || 'Sin especificar')); return p;
 }
+const publicationStatusLabels = { active: 'Disponible', reserved: 'Permuta acordada', exchanged: 'Permutada' };
+function ownerLink(name, userId) {
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'owner-link'; button.textContent = name || 'Usuario';
+  button.setAttribute('aria-label', 'Ver perfil de ' + (name || 'usuario'));
+  button.addEventListener('click', e => { e.stopPropagation(); if ($('detailDialog').open) $('detailDialog').close(); openPublicProfile(userId); });
+  return button;
+}
 function updateAccount() {
   const signed = !!currentUser; if (myProfile?.id !== currentUser?.id) myProfile = null;
   $('accountLabel').textContent = signed ? (myProfile?.display_name || currentUser.email) : '';
@@ -105,7 +112,7 @@ function render() {
   }
   for (const item of filtered) {
     const card = document.createElement('article'); card.className = 'card'; const body = document.createElement('div'); body.className = 'card-body';
-    const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = item.category + ' · ' + item.owner_name + ' · ' + locationText(item);
+    const meta = document.createElement('div'); meta.className = 'meta'; meta.append(item.category + ' · ', ownerLink(item.owner_name, item.owner_id), ' · ' + locationText(item));
     const title = document.createElement('h3'); title.textContent = item.title;
     const wanted = document.createElement('p'); wanted.textContent = 'Busca: ' + item.wanted;
     const button = document.createElement('button'); button.textContent = 'Ver y proponer permuta'; button.addEventListener('click', () => openDetail(item));
@@ -138,11 +145,13 @@ function photoField(id, previewId) {
 function openDetail(item) {
   const box = $('detailContent'); box.replaceChildren();
   const title = document.createElement('h2'); title.textContent = item.title;
-  const meta = document.createElement('p'); meta.textContent = item.category + ' · Publicado por ' + item.owner_name;
+  const meta = document.createElement('p'); meta.append(item.category + ' · Publicado por ', ownerLink(item.owner_name, item.owner_id));
   const desc = document.createElement('p'); desc.textContent = item.description;
   box.append(title, meta, gallery(pathsFor(item), item.title), detailLine('Ubicación: ', locationText(item)), desc, detailLine('Lo tiene desde: ', item.owned_time), detailLine('Motivo de publicación: ', item.reason), detailLine('Busca a cambio: ', item.wanted));
   if (currentUser?.id === item.owner_id) {
     const own = document.createElement('p'); own.className = 'success'; own.textContent = 'Esta es tu publicación. Las propuestas recibidas están en el botón Propuestas.'; box.append(own);
+  } else if (item.status !== 'active') {
+    const closed = document.createElement('p'); closed.className = 'success'; closed.textContent = 'Este artículo ya no está disponible para permutar (' + (publicationStatusLabels[item.status] || item.status).toLowerCase() + ').'; box.append(closed);
   } else {
     const form = document.createElement('form'); form.className = 'form';
     const heading = document.createElement('h3'); heading.textContent = 'Ofrecer una permuta';
@@ -251,7 +260,8 @@ function renderMyOffers() {
     const h = document.createElement('h3'); h.textContent = offer.title || 'Propuesta de permuta';
     row.append(detailLine('Publicación: ', entry.publication_title), detailLine('Estado: ', statusLabels[offer.status] || offer.status), h);
     if (offer.photo_paths?.length) row.append(gallery(offer.photo_paths, offer.title || 'Objeto ofrecido'));
-    row.append(detailLine('De: ', offer.sender_name), detailLine('Categoría: ', offer.category), detailLine('Descripción: ', offer.description || offer.offered_item), detailLine('Lo tiene desde: ', offer.owned_time), detailLine('Motivo de la permuta: ', offer.reason), detailLine('Contacto del oferente: ', offer.contact));
+    const from = document.createElement('p'); const fromLabel = document.createElement('strong'); fromLabel.textContent = 'De: '; from.append(fromLabel, ownerLink(offer.sender_name, offer.sender_id));
+    row.append(from,detailLine('Categoría: ', offer.category), detailLine('Descripción: ', offer.description || offer.offered_item), detailLine('Lo tiene desde: ', offer.owned_time), detailLine('Motivo de la permuta: ', offer.reason), detailLine('Contacto del oferente: ', offer.contact));
     if (offer.status === 'pending') {
       const actions = document.createElement('div'); actions.className = 'manage-actions';
       const errorBox = document.createElement('p'); errorBox.className = 'error'; errorBox.hidden = true; errorBox.setAttribute('role', 'alert');
@@ -464,7 +474,8 @@ async function openMyProfile() {
   if (currentUser?.id !== userId) return;
   box.replaceChildren();
   const heading = document.createElement('h2'); heading.textContent = 'Mi perfil';
-  const intro = document.createElement('p'); intro.textContent = 'Así te ven las demás personas en permutON. Tu email y tus datos de contacto no se muestran en el perfil.';
+  const intro = document.createElement('p'); intro.textContent = 'Así te ven las demás personas en permutON. Tu email y tus datos de contacto no se muestran en el perfil. ';
+  const viewPublic = document.createElement('button'); viewPublic.type = 'button'; viewPublic.className = 'link-btn'; viewPublic.textContent = 'Ver mi perfil público'; viewPublic.addEventListener('click', () => openPublicProfile(userId)); intro.append(viewPublic);
   const head = document.createElement('div'); head.className = 'profile-head';
   const avatar = avatarImage(profile); const since = document.createElement('p'); since.className = 'hint'; since.textContent = profile ? memberSince(profile.created_at) : '';
   head.append(avatar, since);
@@ -519,6 +530,86 @@ async function openMyProfile() {
   box.append(heading, intro, head, form);
 }
 $('profileBtn').addEventListener('click', openMyProfile);
+
+function lastActivityText(day) {
+  if (!day) return '';
+  const [y, m, d] = day.split('-').map(Number); const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.round((today - new Date(y, m - 1, d)) / 86400000);
+  return 'Última actividad: ' + (days <= 0 ? 'hoy' : days === 1 ? 'ayer' : days < 7 ? 'esta semana' : days < 31 ? 'este mes' : 'hace más de un mes');
+}
+function responseTimeText(hours) {
+  if (hours === null || hours === undefined) return '—';
+  if (hours < 1) return 'menos de 1 h';
+  if (hours < 24) return hours + ' h';
+  const days = Math.round(hours / 24); return days + (days === 1 ? ' día' : ' días');
+}
+function statTile(value, label) {
+  const tile = document.createElement('div'); tile.className = 'stat';
+  const strong = document.createElement('strong'); strong.textContent = value; const span = document.createElement('span'); span.textContent = label;
+  tile.append(strong, span); return tile;
+}
+let publicProfileGeneration = 0;
+async function openPublicProfile(userId) {
+  if (!db || !userId) return;
+  const generation = ++publicProfileGeneration;
+  const box = $('publicProfileContent'); box.textContent = 'Cargando perfil...';
+  if (!$('publicProfileDialog').open) $('publicProfileDialog').showModal();
+  const [profileRes, statsRes, pubsRes] = await Promise.all([
+    db.from('profiles').select('id,display_name,bio,province_id,locality_id,avatar_path,created_at').eq('id', userId).maybeSingle(),
+    db.rpc('get_profile_stats', { target_user: userId }),
+    db.from('publications').select('*').eq('owner_id', userId).in('status', ['active', 'reserved', 'exchanged']).order('created_at', { ascending: false }).limit(60)
+  ]);
+  if (generation !== publicProfileGeneration) return;
+  const error = profileRes.error || statsRes.error || pubsRes.error;
+  if (error) { box.textContent = 'No pudimos cargar el perfil: ' + displayError(error); return; }
+  const profile = profileRes.data;
+  if (!profile) { box.textContent = 'Este perfil ya no existe.'; return; }
+  const stats = statsRes.data || {}; const pubs = pubsRes.data || [];
+  box.replaceChildren();
+
+  const head = document.createElement('div'); head.className = 'profile-head';
+  const info = document.createElement('div');
+  const name = document.createElement('h2'); name.textContent = profile.display_name; info.append(name);
+  if (profile.locality_id) { const place = document.createElement('p'); place.className = 'hint'; place.textContent = locationText(profile); info.append(place); }
+  const since = document.createElement('p'); since.className = 'hint'; since.textContent = memberSince(profile.created_at); info.append(since);
+  const activity = lastActivityText(stats.last_activity);
+  if (activity) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = activity; info.append(p); }
+  head.append(avatarImage(profile), info); box.append(head);
+  if (profile.bio) { const bio = document.createElement('p'); bio.textContent = profile.bio; box.append(bio); }
+  if (currentUser?.id === profile.id) { const own = document.createElement('p'); own.className = 'success'; own.textContent = 'Así ven tu perfil las demás personas.'; box.append(own); }
+
+  const received = stats.offers_received || 0;
+  const grid = document.createElement('div'); grid.className = 'stats';
+  grid.append(
+    statTile(String(stats.accepted_trades || 0), 'Permutas acordadas'),
+    statTile(String(stats.active_publications || 0), 'Publicaciones disponibles'),
+    statTile(received ? Math.round((stats.offers_answered || 0) / received * 100) + '%' : '—', received ? 'Responde las propuestas que recibe' : 'Todavía no recibió propuestas'),
+    statTile(responseTimeText(stats.avg_response_hours), 'Tiempo de respuesta promedio')
+  );
+  box.append(grid);
+
+  const available = pubs.filter(p => p.status === 'active'); const history = pubs.filter(p => p.status !== 'active');
+  const tabs = document.createElement('div'); tabs.className = 'manage-actions';
+  const list = document.createElement('div'); list.className = 'mini-grid';
+  const tabButtons = [['Disponibles', available], ['Historial', history]].map(([label, records], index) => {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = `${label} (${records.length})`;
+    button.addEventListener('click', () => showTab(index)); tabs.append(button); return [button, records, label];
+  });
+  function showTab(index) {
+    tabButtons.forEach(([button], i) => button.setAttribute('aria-pressed', String(i === index)));
+    const records = tabButtons[index][1]; list.replaceChildren();
+    if (!records.length) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = index === 0 ? 'No tiene publicaciones disponibles en este momento.' : 'Todavía no tiene permutas en su historial.'; list.append(p); return; }
+    for (const item of records) {
+      const card = document.createElement('article'); card.className = 'card'; const body = document.createElement('div'); body.className = 'card-body';
+      const status = document.createElement('div'); status.className = 'meta'; status.textContent = publicationStatusLabels[item.status] + ' · ' + item.category;
+      const title = document.createElement('h3'); title.textContent = item.title;
+      const view = document.createElement('button'); view.type = 'button'; view.textContent = 'Ver'; view.addEventListener('click', () => openDetail(item));
+      body.append(status, title, view); card.append(imageFor(item), body); list.append(card);
+    }
+  }
+  showTab(0);
+  box.append(tabs, list);
+}
 
 // Mantener el catálogo al día cuando otros usuarios aceptan permutas.
 setInterval(() => { if (db && !document.hidden) loadItems(); }, 15000);

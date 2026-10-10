@@ -2,6 +2,12 @@
 
 La app usa Supabase Auth, PostgreSQL y Storage. Las publicaciones y propuestas quedan disponibles entre dispositivos. No incluye pagos ni chat en esta etapa.
 
+## Actualización: perfil público
+
+Ejecutá `migration-07-public-profile.sql` una vez en SQL Editor después de migration-06, antes de reemplazar `dist/index.html` y `dist/app.js`.
+
+Tocando el nombre de quien publica (en el catálogo o el detalle) o de quien envía una propuesta se abre su perfil público: foto, bio, ubicación, antigüedad, última actividad (solo el día), publicaciones disponibles e historial de reservadas/permutadas. Muestra permutas acordadas, publicaciones disponibles, porcentaje de propuestas respondidas y tiempo de respuesta promedio; esas cifras las calcula la función `get_profile_stats` en la base, sin exponer propuestas ni mensajes. Las publicaciones reservadas e intercambiadas pasan a ser visibles para todos (el catálogo sigue mostrando solo las activas).
+
 ## Actualización: perfiles de usuario
 
 Ejecutá `migration-06-profiles.sql` una vez en SQL Editor después de migration-05, **antes** de reemplazar `dist/index.html` y `dist/app.js` (conservá `config.js`).
@@ -56,7 +62,7 @@ La migración debe ejecutarse antes de usar la nueva página.
 Abrí la carpeta `permuton` y ejecutá en la terminal:
 
 ```bash
-python3 -m http.server 8000 --directory dist
+python -m http.server 8000 --directory dist
 ```
 
 Abrí `http://localhost:8000`. También podés usar Live Server, ajustando la Site URL al puerto que utilice.
