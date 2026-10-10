@@ -3,6 +3,7 @@ const cfg = window.PERMUTON_CONFIG || {};
 const configured = /^https:\/\/.+\.supabase\.co$/.test(cfg.supabaseUrl || '') && cfg.supabasePublishableKey && !cfg.supabasePublishableKey.startsWith('TU_');
 const db = configured && window.supabase?.createClient(cfg.supabaseUrl, cfg.supabasePublishableKey);
 let currentUser = null;
+let myProfile = null;
 let items = [];
 let authMode = 'login';
 const previewUrls = new Map();
@@ -73,9 +74,20 @@ function detailLine(label, value) {
   p.append(b, document.createTextNode(value || 'Sin especificar')); return p;
 }
 function updateAccount() {
-  const signed = !!currentUser; $('accountLabel').textContent = signed ? currentUser.email : '';
-  $('authBtn').hidden = signed; $('logoutBtn').hidden = !signed; $('offersBtn').hidden = !signed; $('myPublicationsBtn').hidden = !signed;
-  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); }
+  const signed = !!currentUser; if (myProfile?.id !== currentUser?.id) myProfile = null;
+  $('accountLabel').textContent = signed ? (myProfile?.display_name || currentUser.email) : '';
+  $('authBtn').hidden = signed; $('logoutBtn').hidden = !signed; $('offersBtn').hidden = !signed; $('myPublicationsBtn').hidden = !signed; $('profileBtn').hidden = !signed;
+  if (signed) loadMyProfile();
+  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); }
+}
+async function loadMyProfile() {
+  if (!currentUser) return null;
+  const userId = currentUser.id;
+  const { data, error } = await db.from('profiles').select('*').eq('id', userId).maybeSingle();
+  if (currentUser?.id !== userId) return null;
+  if (error) { message('No pudimos cargar tu perfil: ' + displayError(error)); return null; }
+  myProfile = data; $('accountLabel').textContent = myProfile?.display_name || currentUser.email;
+  return myProfile;
 }
 async function loadItems() {
   if (!db) return;
@@ -137,7 +149,7 @@ function openDetail(item) {
     const [photos, preview] = photoField('offerPhotos', 'offerPreviews');
     const errorBox = document.createElement('p'); errorBox.className = 'error'; errorBox.setAttribute('role', 'alert'); errorBox.hidden = true;
     const button = document.createElement('button'); button.type = 'submit'; button.className = 'primary'; button.textContent = 'Enviar propuesta';
-    form.append(heading, field('Tu nombre', 'name', 'text', 50), field('Título del objeto', 'title', 'text', 70, 'Ej. Campera talle L'), categorySelect('category'), field('Descripción y estado', 'description', 'textarea', 500), photos, preview, field('¿Hace cuánto lo tenés?', 'ownedTime', 'text', 80, 'Ej. Hace 2 años'), field('¿Por qué lo ofrecés?', 'reason', 'textarea', 300), field('Tu contacto (email o teléfono)', 'contact', 'text', 100, 'Visible solo para quien publicó'), errorBox, button);
+    form.append(heading, field('Título del objeto', 'title', 'text', 70, 'Ej. Campera talle L'), categorySelect('category'), field('Descripción y estado', 'description', 'textarea', 500), photos, preview, field('¿Hace cuánto lo tenés?', 'ownedTime', 'text', 80, 'Ej. Hace 2 años'), field('¿Por qué lo ofrecés?', 'reason', 'textarea', 300), field('Tu contacto (email o teléfono)', 'contact', 'text', 100, 'Visible solo para quien publicó'), errorBox, button);
     form.addEventListener('submit', e => submitOffer(e, item, form, button, errorBox)); box.append(form);
   }
   $('detailDialog').showModal();
@@ -159,11 +171,11 @@ function previewFiles(input, container) {
     urls.forEach((url, i) => { const img = document.createElement('img'); img.src = url; img.alt = 'Foto seleccionada ' + (i + 1); container.append(img); });
   } catch (error) { input.value = ''; const p = document.createElement('p'); p.className = 'error'; p.textContent = displayError(error); container.append(p); }
 }
-async function compressPhoto(file) {
+async function compressPhoto(file, maxSide = 1000) {
   const url = URL.createObjectURL(file);
   try {
     const img = new Image(); img.src = url; await img.decode();
-    const scale = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight)); const canvas = document.createElement('canvas');
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight)); const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(img.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
     canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
     return await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error('No pudimos procesar la foto.')), 'image/jpeg', .72));
@@ -189,7 +201,7 @@ async function submitOffer(e, item, form, button, errorBox) {
   try {
     const files = validateFiles(form.querySelector('input[type="file"]')); const d = new FormData(form);
     uploaded = await uploadPhotos(files);
-    const row = { publication_id: item.id, sender_id: currentUser.id, sender_name: String(d.get('name')).trim(), title: String(d.get('title')).trim(), category: String(d.get('category')), description: String(d.get('description')).trim(), offered_item: String(d.get('description')).trim(), owned_time: String(d.get('ownedTime')).trim(), reason: String(d.get('reason')).trim(), contact: String(d.get('contact')).trim(), photo_paths: uploaded };
+    const row = { publication_id: item.id, sender_id: currentUser.id, title: String(d.get('title')).trim(), category: String(d.get('category')), description: String(d.get('description')).trim(), offered_item: String(d.get('description')).trim(), owned_time: String(d.get('ownedTime')).trim(), reason: String(d.get('reason')).trim(), contact: String(d.get('contact')).trim(), photo_paths: uploaded };
     const { error } = await db.from('offers').insert(row); if (error) throw error;
     clearPreview(form.querySelector('.preview-grid'));
     const success = document.createElement('p'); success.className = 'success'; success.textContent = 'Propuesta enviada. El dueño podrá ver las fotos y los detalles en Propuestas.'; form.replaceWith(success);
@@ -198,15 +210,16 @@ async function submitOffer(e, item, form, button, errorBox) {
 }
 function openAuth() { if (!db) { message('Configurá Supabase en config.js para activar las cuentas y publicaciones.'); return; } $('authDialog').showModal(); }
 function showAuthMode() {
-  const signup = authMode === 'signup'; $('authTitle').textContent = signup ? 'Crear cuenta' : 'Ingresar'; $('authSubmit').textContent = signup ? 'Crear cuenta' : 'Ingresar'; $('authToggle').textContent = signup ? 'Ya tengo cuenta' : 'Crear una cuenta'; $('authError').hidden = true;
+  const signup = authMode === 'signup'; $('authNameField').hidden = !signup; $('authForm').elements.namedItem('displayName').required = signup; $('authTitle').textContent = signup ? 'Crear cuenta' : 'Ingresar'; $('authSubmit').textContent = signup ? 'Crear cuenta' : 'Ingresar'; $('authToggle').textContent = signup ? 'Ya tengo cuenta' : 'Crear una cuenta'; $('authError').hidden = true;
 }
 $('authToggle').addEventListener('click', () => { authMode = authMode === 'login' ? 'signup' : 'login'; showAuthMode(); });
 $('authForm').addEventListener('submit', async e => {
   e.preventDefault(); const authForm = e.currentTarget; const d = new FormData(authForm); const email = String(d.get('email')).trim(); const password = String(d.get('password')); const button = $('authSubmit'); button.disabled = true; $('authError').hidden = true;
   try {
-    const { data, error } = authMode === 'signup' ? await db.auth.signUp({ email, password }) : await db.auth.signInWithPassword({ email, password });
+    const displayName = String(d.get('displayName') || '').trim();
+    const { data, error } = authMode === 'signup' ? await db.auth.signUp({ email, password, options: { data: { display_name: displayName } } }) : await db.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    if (authMode === 'signup' && !data.session) { $('authError').textContent = 'Revisá tu email para confirmar la cuenta. Después ingresá.'; $('authError').className = 'success'; $('authError').hidden = false; authMode = 'login'; $('authSubmit').textContent = 'Ingresar'; $('authToggle').textContent = 'Crear una cuenta'; return; }
+    if (authMode === 'signup' && !data.session) { authMode = 'login'; showAuthMode(); $('authError').textContent = 'Revisá tu email para confirmar la cuenta. Después ingresá.'; $('authError').className = 'success'; $('authError').hidden = false; return; }
     $('authDialog').close(); authForm.reset();
   } catch (error) { $('authError').className = 'error'; $('authError').textContent = displayError(error); $('authError').hidden = false; }
   finally { button.disabled = false; }
@@ -276,7 +289,7 @@ $('publishForm').addEventListener('submit', async e => {
   let uploaded = []; button.disabled = true; button.textContent = 'Publicando...';
   try {
     const location = locationValues(form); const files = validateFiles($('photos')); const d = new FormData(form); uploaded = await uploadPhotos(files);
-    const row = { ...location, owner_id: currentUser.id, owner_name: String(d.get('owner')).trim(), title: String(d.get('title')).trim(), category: String(d.get('category')), description: String(d.get('description')).trim(), owned_time: String(d.get('ownedTime')).trim(), reason: String(d.get('reason')).trim(), wanted: String(d.get('wanted')).trim(), photo_path: uploaded[0], photo_paths: uploaded };
+    const row = { ...location, owner_id: currentUser.id, title: String(d.get('title')).trim(), category: String(d.get('category')), description: String(d.get('description')).trim(), owned_time: String(d.get('ownedTime')).trim(), reason: String(d.get('reason')).trim(), wanted: String(d.get('wanted')).trim(), photo_path: uploaded[0], photo_paths: uploaded };
     const { error } = await db.from('publications').insert(row); if (error) throw error;
     form.reset(); fillLocalities(form.elements.namedItem('locality'), '', 'Seleccionar localidad'); clearPreview($('publishPreviews')); $('publishDialog').close(); $('search').value = ''; $('category').value = ''; $('provinceFilter').value = ''; fillLocalities($('localityFilter'), '', 'Todas las localidades'); await loadItems();
   } catch (error) { await removePhotos(uploaded); $('publishError').textContent = displayError(error); $('publishError').hidden = false; }
@@ -399,9 +412,9 @@ function openEditPublication(item) {
   const box = $('editPublicationContent'); box.replaceChildren();
   const heading = document.createElement('h2'); heading.textContent = 'Editar publicación';
   const form = document.createElement('form'); form.className = 'form';
-  form.append(field('Título', 'title', 'text', 70), categorySelect('category'), field('Descripción y estado', 'description', 'textarea', 500), field('¿Hace cuánto lo tenés?', 'ownedTime', 'text', 80), field('¿Por qué lo publicás?', 'reason', 'textarea', 300), field('Busco a cambio', 'wanted', 'text', 100), field('Tu nombre', 'owner', 'text', 50));
+  form.append(field('Título', 'title', 'text', 70), categorySelect('category'), field('Descripción y estado', 'description', 'textarea', 500), field('¿Hace cuánto lo tenés?', 'ownedTime', 'text', 80), field('¿Por qué lo publicás?', 'reason', 'textarea', 300), field('Busco a cambio', 'wanted', 'text', 100));
   form.append(...locationFields(item));
-  const values = { title: item.title, category: item.category, description: item.description, ownedTime: item.owned_time, reason: item.reason, wanted: item.wanted, owner: item.owner_name };
+  const values = { title: item.title, category: item.category, description: item.description, ownedTime: item.owned_time, reason: item.reason, wanted: item.wanted };
   for (const [name, value] of Object.entries(values)) form.elements.namedItem(name).value = value;
   const current = document.createElement('p'); current.textContent = 'Fotos actuales';
   const [photoLabel, previews] = photoField('editPhotos', 'editPreviews');
@@ -417,7 +430,7 @@ function openEditPublication(item) {
     const d = new FormData(form); let uploaded = []; let committed = false;
     submit.disabled = true; submit.textContent = 'Guardando...';
     try {
-      const changes = { ...locationValues(form), title: String(d.get('title')).trim(), category: String(d.get('category')), description: String(d.get('description')).trim(), owned_time: String(d.get('ownedTime')).trim(), reason: String(d.get('reason')).trim(), wanted: String(d.get('wanted')).trim(), owner_name: String(d.get('owner')).trim() };
+      const changes = { ...locationValues(form), title: String(d.get('title')).trim(), category: String(d.get('category')), description: String(d.get('description')).trim(), owned_time: String(d.get('ownedTime')).trim(), reason: String(d.get('reason')).trim(), wanted: String(d.get('wanted')).trim() };
       if (Object.values(changes).some(value => !value)) throw Error('Completá todos los campos.');
       if (input.files.length) { uploaded = await uploadPhotos(validateFiles(input)); changes.photo_path = uploaded[0]; changes.photo_paths = uploaded; }
       const { data, error } = await db.from('publications').update(changes).eq('id', item.id).eq('owner_id', currentUser.id).select('id');
@@ -435,6 +448,77 @@ function openEditPublication(item) {
 }
 $('myPublicationsBtn').addEventListener('click', openMyPublications);
 $('editPublicationDialog').addEventListener('close', () => { const previews = $('editPreviews'); if (previews) clearPreview(previews); });
+
+function memberSince(date) { return 'Miembro desde ' + new Date(date).toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }); }
+function avatarImage(profile) {
+  const img = document.createElement('img'); img.className = 'avatar'; img.alt = profile?.avatar_path ? 'Foto de ' + profile.display_name : '';
+  img.src = profile?.avatar_path ? photoUrl(profile.avatar_path) : 'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='#dce9df'/><circle cx='32' cy='25' r='11' fill='#8fb3a6'/><path d='M12 56c3-12 11-18 20-18s17 6 20 18' fill='#8fb3a6'/></svg>");
+  return img;
+}
+async function openMyProfile() {
+  if (!currentUser) return;
+  const userId = currentUser.id;
+  const box = $('profileContent'); box.textContent = 'Cargando...';
+  if (!$('profileDialog').open) $('profileDialog').showModal();
+  const profile = await loadMyProfile();
+  if (currentUser?.id !== userId) return;
+  box.replaceChildren();
+  const heading = document.createElement('h2'); heading.textContent = 'Mi perfil';
+  const intro = document.createElement('p'); intro.textContent = 'Así te ven las demás personas en permutON. Tu email y tus datos de contacto no se muestran en el perfil.';
+  const head = document.createElement('div'); head.className = 'profile-head';
+  const avatar = avatarImage(profile); const since = document.createElement('p'); since.className = 'hint'; since.textContent = profile ? memberSince(profile.created_at) : '';
+  head.append(avatar, since);
+  const form = document.createElement('form'); form.className = 'form';
+  const name = field('Nombre visible', 'displayName', 'text', 40); name.querySelector('input').minLength = 2;
+  const bio = field('Sobre vos (opcional)', 'bio', 'textarea', 300, 'Ej. Me gusta el deporte y cambio ropa que ya no uso.'); bio.querySelector('textarea').required = false;
+  const location = locationFields(profile || {}); location.forEach(label => { label.querySelector('select').required = false; label.firstChild.textContent += ' (opcional)'; });
+  const photoLabel = document.createElement('label'); photoLabel.textContent = 'Foto de perfil (opcional)';
+  const photoInput = document.createElement('input'); photoInput.type = 'file'; photoInput.accept = 'image/jpeg,image/png,image/webp'; photoLabel.append(photoInput);
+  const removeLabel = document.createElement('label'); removeLabel.className = 'checkbox'; const removeInput = document.createElement('input'); removeInput.type = 'checkbox';
+  removeLabel.append(removeInput, document.createTextNode('Quitar mi foto actual')); removeLabel.hidden = !profile?.avatar_path;
+  let previewUrl = null;
+  photoInput.addEventListener('change', () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = null;
+    const file = photoInput.files[0]; if (!file) { avatar.src = avatarImage(profile).src; return; }
+    previewUrl = URL.createObjectURL(file); avatar.src = previewUrl; removeInput.checked = false;
+  });
+  const errorBox = document.createElement('p'); errorBox.className = 'error'; errorBox.hidden = true; errorBox.setAttribute('role', 'alert');
+  const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'primary'; submit.textContent = 'Guardar perfil';
+  form.append(name, bio, ...location, photoLabel, removeLabel, errorBox, submit);
+  form.elements.namedItem('displayName').value = profile?.display_name || '';
+  form.elements.namedItem('bio').value = profile?.bio || '';
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); errorBox.hidden = true;
+    if (currentUser?.id !== userId) return;
+    let uploaded = null; let committed = false;
+    submit.disabled = true; submit.textContent = 'Guardando...';
+    try {
+      const displayName = form.elements.namedItem('displayName').value.trim();
+      if (displayName.length < 2) throw Error('El nombre debe tener al menos 2 letras.');
+      const province = form.elements.namedItem('province').value; const locality = form.elements.namedItem('locality').value;
+      const place = !province && !locality ? { province_id: null, locality_id: null } : locationValues(form);
+      const changes = { display_name: displayName, bio: form.elements.namedItem('bio').value.trim() || null, ...place };
+      const file = photoInput.files[0];
+      if (file) {
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) throw Error('La foto debe ser JPG, PNG o WebP y pesar hasta 8 MB.');
+        const blob = await compressPhoto(file, 400); uploaded = `${userId}/avatar-${crypto.randomUUID()}.jpg`;
+        const { error } = await db.storage.from('publication-photos').upload(uploaded, blob, { contentType: 'image/jpeg', upsert: false });
+        if (error) { uploaded = null; throw error; }
+        changes.avatar_path = uploaded;
+      } else if (removeInput.checked) changes.avatar_path = null;
+      const query = profile ? db.from('profiles').update(changes).eq('id', userId) : db.from('profiles').insert({ id: userId, ...changes });
+      const { error } = await query; if (error) throw error;
+      committed = true;
+      if (profile?.avatar_path && 'avatar_path' in changes) await removePhotos([profile.avatar_path]);
+      await loadMyProfile();
+      if (currentUser?.id === userId) { $('profileDialog').close(); loadItems(); }
+    } catch (error) { if (!committed && uploaded) await removePhotos([uploaded]); errorBox.textContent = displayError(error); errorBox.hidden = false; }
+    finally { submit.disabled = false; submit.textContent = 'Guardar perfil'; }
+  });
+  $('profileDialog').addEventListener('close', () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = null; }, { once: true });
+  box.append(heading, intro, head, form);
+}
+$('profileBtn').addEventListener('click', openMyProfile);
 
 // Mantener el catálogo al día cuando otros usuarios aceptan permutas.
 setInterval(() => { if (db && !document.hidden) loadItems(); }, 15000);

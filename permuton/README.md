@@ -2,6 +2,12 @@
 
 La app usa Supabase Auth, PostgreSQL y Storage. Las publicaciones y propuestas quedan disponibles entre dispositivos. No incluye pagos ni chat en esta etapa.
 
+## Actualización: perfiles de usuario
+
+Ejecutá `migration-06-profiles.sql` una vez en SQL Editor después de migration-05, **antes** de reemplazar `dist/index.html` y `dist/app.js` (conservá `config.js`).
+
+Cada cuenta tiene un perfil con nombre visible, bio, ubicación y foto opcionales, editable desde **Mi perfil**. El registro pide el nombre visible. Los usuarios existentes reciben un perfil con el último nombre que usaron al publicar o proponer. El nombre de publicaciones y propuestas lo asigna la base a partir del perfil (ya no se escribe en cada formulario) y se actualiza en todas ellas al cambiarlo. El perfil no muestra email ni contacto. La foto de perfil se guarda en el mismo bucket de fotos, dentro de la carpeta del usuario.
+
 ## Actualización: diseño responsive
 
 Reemplazá `dist/index.html` y conservá los demás archivos y config.js. No requiere SQL. Se ajustaron encabezado, filtros, catálogo, controles y ventanas para celular, tablet y escritorio. En celulares de hasta 540 px las ventanas ocupan la pantalla; en tablet/escritorio tienen altura limitada y scroll. Se aumentaron controles táctiles y tamaños de campos para evitar zoom involuntario en móviles.
