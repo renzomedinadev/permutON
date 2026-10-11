@@ -73,7 +73,7 @@ function detailLine(label, value) {
   const p = document.createElement('p'); const b = document.createElement('strong'); b.textContent = label;
   p.append(b, document.createTextNode(value || 'Sin especificar')); return p;
 }
-const publicationStatusLabels = { active: 'Disponible', reserved: 'Permuta acordada', exchanged: 'Permutada' };
+const publicationStatusLabels = { active: 'Disponible', reserved: 'Permuta en curso', exchanged: 'Permutada' };
 function ownerLink(name, userId) {
   const button = document.createElement('button'); button.type = 'button'; button.className = 'owner-link'; button.textContent = name || 'Usuario';
   button.setAttribute('aria-label', 'Ver perfil de ' + (name || 'usuario'));
@@ -83,9 +83,9 @@ function ownerLink(name, userId) {
 function updateAccount() {
   const signed = !!currentUser; if (myProfile?.id !== currentUser?.id) myProfile = null;
   $('accountLabel').textContent = signed ? (myProfile?.display_name || currentUser.email) : '';
-  $('authBtn').hidden = signed; $('logoutBtn').hidden = !signed; $('offersBtn').hidden = !signed; $('myPublicationsBtn').hidden = !signed; $('profileBtn').hidden = !signed;
-  if (signed) loadMyProfile();
-  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); }
+  $('authBtn').hidden = signed; $('logoutBtn').hidden = !signed; $('offersBtn').hidden = !signed; $('myPublicationsBtn').hidden = !signed; $('profileBtn').hidden = !signed; $('notificationsBtn').hidden = !signed;
+  if (signed) { loadMyProfile(); loadNotificationCount(); }
+  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog', 'notificationsDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); $('notificationsList').replaceChildren(); $('notificationsBtn').textContent = 'Avisos'; }
 }
 async function loadMyProfile() {
   if (!currentUser) return null;
@@ -99,7 +99,7 @@ async function loadMyProfile() {
 async function loadItems() {
   if (!db) return;
   message('');
-  const { data, error } = await db.from('publications').select('*').eq('status', 'active').order('created_at', { ascending: false }).limit(100);
+  const { data, error } = await db.from('publications').select('*').eq('status', 'active').gt('expires_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(100);
   if (error) { message('No pudimos cargar las publicaciones: ' + displayError(error)); return; }
   items = data || []; render();
 }
@@ -238,7 +238,36 @@ $('logoutBtn').addEventListener('click', async () => { const { error } = await d
 $('publishBtn').addEventListener('click', () => currentUser ? $('publishDialog').showModal() : openAuth());
 let offerDirection = 'received';
 let offerEntries = [];
-const statusLabels = { pending: 'Pendiente', accepted: 'Aceptada', rejected: 'Rechazada', cancelled: 'Cancelada' };
+const statusLabels = { pending: 'Pendiente', accepted: 'Aceptada · Esperando confirmación', rejected: 'Rechazada', cancelled: 'Cancelada', completed: 'Permuta concretada', failed: 'No se concretó', abandoned: 'Cancelada por falta de respuesta', expired: 'Vencida' };
+function shortDate(value) { return new Date(value).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+function tradeBox(entry) {
+  const offer = entry.offer; const mine = entry.direction === 'received' ? offer.owner_response : offer.sender_response;
+  const theirs = entry.direction === 'received' ? offer.sender_response : offer.owner_response;
+  const box = document.createElement('div'); box.className = 'trade-box';
+  const deadline = new Date(new Date(offer.accepted_at).getTime() + 5 * 86400000);
+  const info = document.createElement('p');
+  const errorBox = document.createElement('p'); errorBox.className = 'error'; errorBox.hidden = true; errorBox.setAttribute('role', 'alert');
+  if (mine) {
+    info.textContent = 'Ya respondiste que ' + (mine === 'confirmed' ? 'se concretó' : 'no se concretó') + '. Esperando a la otra parte (plazo: ' + shortDate(deadline) + ').';
+    box.append(info); return box;
+  }
+  info.textContent = (theirs === 'confirmed' ? 'La otra parte ya confirmó. ' : '') + '¿Se concretó la permuta? Respondé antes del ' + shortDate(deadline) + '. Solo se concreta si las dos partes confirman.';
+  const actions = document.createElement('div'); actions.className = 'manage-actions';
+  for (const [label, result] of [['Sí, se concretó', 'confirmed'], ['No se concretó', 'failed']]) {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+    button.addEventListener('click', async () => {
+      if (!currentUser) return;
+      if (!confirm(result === 'confirmed' ? '¿Confirmás que la permuta se concretó? No se puede cambiar después.' : '¿Confirmás que la permuta NO se concretó? Se cancelará y la publicación volverá al catálogo.')) return;
+      actions.querySelectorAll('button').forEach(b => b.disabled = true); errorBox.hidden = true;
+      try {
+        const { error } = await db.rpc('respond_trade', { offer_id: offer.id, result }); if (error) throw error;
+        await loadItems(); await loadMyOffers(); loadNotificationCount();
+      } catch (error) { errorBox.textContent = displayError(error); errorBox.hidden = false; actions.querySelectorAll('button').forEach(b => b.disabled = false); }
+    });
+    actions.append(button);
+  }
+  box.append(info, actions, errorBox); return box;
+}
 async function loadMyOffers() {
   if (!currentUser) return;
   const userId = currentUser.id; const box = $('offersList'); box.textContent = 'Cargando...';
@@ -282,6 +311,7 @@ function renderMyOffers() {
       }
       row.append(actions, errorBox);
     }
+    if (offer.status === 'accepted') row.append(tradeBox(entry));
     const chatButton = document.createElement('button'); chatButton.type = 'button'; chatButton.className = 'primary'; chatButton.textContent = 'Abrir chat'; chatButton.addEventListener('click', () => openOfferChat(entry)); row.append(chatButton);
     box.append(row);
   }
@@ -320,7 +350,7 @@ async function openOfferChat(entry) {
   $('chatTitle').textContent = 'Chat · ' + entry.publication_title;
   $('chatSubtitle').textContent = 'Propuesta: ' + (entry.offer.title || entry.offer.offered_item);
   $('chatMessages').replaceChildren(); $('chatError').hidden = true; $('chatForm').reset();
-  const closed = ['rejected', 'cancelled'].includes(chatOffer.status);
+  const closed = !['pending', 'accepted'].includes(chatOffer.status);
   $('chatForm').hidden = closed;
   $('chatInfo').textContent = closed ? 'La propuesta está cerrada. Podés consultar el historial.' : 'Solo las dos personas de esta propuesta pueden ver los mensajes.';
   $('chatDialog').showModal();
@@ -386,19 +416,18 @@ async function openMyPublications() {
   for (const item of data) {
     const row = document.createElement('article'); row.className = 'offer-row';
     const h = document.createElement('h3'); h.textContent = item.title;
-    const status = document.createElement('p'); status.textContent = item.status === 'active' ? 'Activa' : item.status === 'reserved' ? 'Permuta aceptada · Fuera del catálogo' : 'Intercambiada';
+    const expired = item.status === 'active' && new Date(item.expires_at) <= new Date();
+    const status = document.createElement('p'); status.textContent = item.status === 'reserved' ? 'Permuta aceptada · Esperando la confirmación de las dos partes' : item.status === 'exchanged' ? 'Permutada' : expired ? 'Vencida · Los demás no la ven. Renovala para volver a ofrecerla.' : 'Activa · Vence el ' + shortDate(item.expires_at);
     const actions = document.createElement('div'); actions.className = 'manage-actions';
     const edit = document.createElement('button'); edit.textContent = 'Editar'; edit.addEventListener('click', () => openEditPublication(item));
-    const toggle = document.createElement('button'); toggle.textContent = item.status === 'active' || item.status === 'reserved' ? 'Marcar como intercambiado' : 'Volver a publicar';
-    toggle.addEventListener('click', async () => {
+    const renew = document.createElement('button'); renew.textContent = 'Renovar 2 semanas'; renew.hidden = item.status !== 'active';
+    renew.addEventListener('click', async () => {
       if (!currentUser || currentUser.id !== item.owner_id) return;
-      toggle.disabled = true;
+      renew.disabled = true;
       try {
-        const { data: changed, error } = await db.from('publications').update({ status: item.status === 'active' || item.status === 'reserved' ? 'exchanged' : 'active' }).eq('id', item.id).eq('owner_id', currentUser.id).select('id');
-        if (error) throw error;
-        if (!changed.length) throw Error('La publicación ya no está disponible.');
+        const { error } = await db.rpc('renew_publication', { publication_id: item.id }); if (error) throw error;
         await loadItems(); await openMyPublications();
-      } catch (error) { alert(displayError(error)); toggle.disabled = false; }
+      } catch (error) { alert(displayError(error)); renew.disabled = false; }
     });
     const remove = document.createElement('button'); remove.textContent = 'Eliminar'; remove.className = 'danger';
     remove.addEventListener('click', async () => {
@@ -414,7 +443,7 @@ async function openMyPublications() {
         if (photoError) alert('La publicación se eliminó, pero no pudimos borrar sus fotos de Storage: ' + displayError(photoError));
       } catch (error) { alert(displayError(error)); remove.disabled = false; }
     });
-    actions.append(edit, toggle, remove); row.append(h, status, detailLine('Ubicación: ', locationText(item)), gallery(pathsFor(item), item.title), actions); box.append(row);
+    actions.append(renew, edit, remove); row.append(h, status, detailLine('Ubicación: ', locationText(item)), gallery(pathsFor(item), item.title), actions); box.append(row);
   }
 }
 function openEditPublication(item) {
@@ -581,14 +610,15 @@ async function openPublicProfile(userId) {
   const received = stats.offers_received || 0;
   const grid = document.createElement('div'); grid.className = 'stats';
   grid.append(
-    statTile(String(stats.accepted_trades || 0), 'Permutas acordadas'),
+    statTile(String(stats.completed_trades || 0), 'Permutas concretadas'),
     statTile(String(stats.active_publications || 0), 'Publicaciones disponibles'),
     statTile(received ? Math.round((stats.offers_answered || 0) / received * 100) + '%' : '—', received ? 'Responde las propuestas que recibe' : 'Todavía no recibió propuestas'),
-    statTile(responseTimeText(stats.avg_response_hours), 'Tiempo de respuesta promedio')
+    statTile(responseTimeText(stats.avg_response_hours), 'Tiempo de respuesta promedio'),
+    statTile(String(stats.unanswered_trades || 0), 'Permutas que dejó sin confirmar')
   );
   box.append(grid);
 
-  const available = pubs.filter(p => p.status === 'active'); const history = pubs.filter(p => p.status !== 'active');
+  const available = pubs.filter(p => p.status === 'active' && new Date(p.expires_at) > new Date()); const history = pubs.filter(p => p.status !== 'active');
   const tabs = document.createElement('div'); tabs.className = 'manage-actions';
   const list = document.createElement('div'); list.className = 'mini-grid';
   const tabButtons = [['Disponibles', available], ['Historial', history]].map(([label, records], index) => {
@@ -610,6 +640,44 @@ async function openPublicProfile(userId) {
   showTab(0);
   box.append(tabs, list);
 }
+
+async function loadNotificationCount() {
+  if (!db || !currentUser) return;
+  const userId = currentUser.id;
+  const { count, error } = await db.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null);
+  if (error || currentUser?.id !== userId) return;
+  $('notificationsBtn').textContent = count ? `Avisos (${count})` : 'Avisos';
+}
+async function openOffersFor(offerId) {
+  await loadMyOffers();
+  const entry = offerEntries.find(e => e.offer.id === offerId);
+  if (entry && entry.direction !== offerDirection) { offerDirection = entry.direction; renderMyOffers(); }
+}
+async function openNotifications() {
+  if (!currentUser) return;
+  const userId = currentUser.id; const box = $('notificationsList'); box.textContent = 'Cargando...';
+  if (!$('notificationsDialog').open) $('notificationsDialog').showModal();
+  const { data, error } = await db.from('notifications').select('*').order('created_at', { ascending: false }).limit(50);
+  if (currentUser?.id !== userId) return;
+  if (error) { box.textContent = displayError(error); return; }
+  box.replaceChildren();
+  if (!data.length) { box.textContent = 'No tenés avisos todavía.'; return; }
+  for (const n of data) {
+    const row = document.createElement('article'); row.className = 'notification' + (n.read_at ? '' : ' unread');
+    const title = document.createElement('strong'); title.textContent = n.title;
+    const body = document.createElement('p'); body.textContent = n.body;
+    const time = document.createElement('time'); time.dateTime = n.created_at; time.className = 'hint'; time.textContent = shortDate(n.created_at);
+    row.append(title, body, time);
+    const go = document.createElement('button'); go.type = 'button'; go.className = 'link-btn';
+    if (n.kind.startsWith('publication_')) { go.textContent = 'Ir a Mis publicaciones'; go.addEventListener('click', () => { $('notificationsDialog').close(); openMyPublications(); }); row.append(go); }
+    else if (n.offer_id) { go.textContent = 'Ir a Mis propuestas'; go.addEventListener('click', () => { $('notificationsDialog').close(); openOffersFor(n.offer_id); }); row.append(go); }
+    box.append(row);
+  }
+  const unread = data.filter(n => !n.read_at).map(n => n.id);
+  if (unread.length) { await db.from('notifications').update({ read_at: new Date().toISOString() }).in('id', unread); loadNotificationCount(); }
+}
+$('notificationsBtn').addEventListener('click', openNotifications);
+setInterval(() => { if (currentUser && !document.hidden) loadNotificationCount(); }, 30000);
 
 // Mantener el catálogo al día cuando otros usuarios aceptan permutas.
 setInterval(() => { if (db && !document.hidden) loadItems(); }, 15000);

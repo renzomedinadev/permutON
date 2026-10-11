@@ -2,6 +2,15 @@
 
 La app usa Supabase Auth, PostgreSQL y Storage. Las publicaciones y propuestas quedan disponibles entre dispositivos. No incluye pagos ni chat en esta etapa.
 
+## Actualización: confirmación de permutas, avisos y vencimiento
+
+Ejecutá `migration-08-trade-confirmation.sql` una vez en SQL Editor después de migration-07, **antes** de reemplazar `dist/index.html` y `dist/app.js` (sin la migración, el catálogo no carga). Las últimas dos líneas del archivo activan una tarea automática con Cron cada 15 minutos; si fallan, activá Cron en **Supabase > Integrations > Cron** y ejecutá solo esas dos líneas.
+
+- **Confirmación:** al aceptar una propuesta, cada parte responde en Mis propuestas si la permuta se concretó. Se concreta solo si las dos confirman. Quien no respondió recibe avisos a los 2 y 3 días. A los 5 días sin las dos respuestas se cancela: si el dueño había respondido, su publicación vuelve al catálogo; si el dueño no respondió, queda vencida y debe renovarla. Quien no respondió suma una "permuta sin confirmar" en su perfil. Si alguien responde que no se concretó, se cancela y la publicación vuelve al catálogo.
+- **Vencimiento:** cada publicación dura 2 semanas y se renueva desde Mis publicaciones. Hay aviso 2 días antes. Al vencer deja de verse en el catálogo y en el perfil público (el dueño la sigue viendo) y sus propuestas pendientes vencen con aviso a quien propuso. Las publicaciones existentes reciben 2 semanas desde que se ejecuta la migración. Ya no se puede marcar como intercambiado a mano.
+- **Avisos:** botón Avisos con contador (se actualiza cada 30 segundos) para propuestas recibidas, aceptadas, rechazadas, canceladas, confirmaciones, recordatorios y vencimientos. Solo dentro de la app.
+- Datos anteriores: las propuestas aceptadas de publicaciones ya marcadas como intercambiadas se dan por concretadas; las aceptadas en curso arrancan sus 5 días al ejecutar la migración.
+
 ## Actualización: perfil público
 
 Ejecutá `migration-07-public-profile.sql` una vez en SQL Editor después de migration-06, antes de reemplazar `dist/index.html` y `dist/app.js`.
