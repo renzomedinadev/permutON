@@ -82,18 +82,32 @@ function ownerLink(name, userId) {
 }
 function updateAccount() {
   const signed = !!currentUser; if (myProfile?.id !== currentUser?.id) myProfile = null;
-  $('accountLabel').textContent = signed ? (myProfile?.display_name || currentUser.email) : '';
+  showAccountInMenu();
+  $('logoutDivider').hidden = !signed;
   $('authBtn').hidden = signed; $('logoutBtn').hidden = !signed; $('offersBtn').hidden = !signed; $('myPublicationsBtn').hidden = !signed; $('profileBtn').hidden = !signed; $('notificationsBtn').hidden = !signed;
   if (signed) { loadMyProfile(); loadNotificationCount(); }
-  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog', 'notificationsDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); $('notificationsList').replaceChildren(); $('notificationsBtn').textContent = 'Avisos'; }
+  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog', 'notificationsDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); $('notificationsList').replaceChildren(); showNotificationCount(0); }
 }
+function showAccountInMenu() {
+  $('accountLabel').textContent = currentUser ? (myProfile?.display_name || 'Mi cuenta') : 'Invitado';
+  $('accountEmail').textContent = currentUser ? currentUser.email : 'Ingresá para publicar y proponer permutas';
+  $('drawerAvatar').src = avatarImage(currentUser ? myProfile : null).src;
+}
+function showNotificationCount(count) {
+  $('notificationsBadge').hidden = !count; $('notificationsBadge').textContent = count > 99 ? '99+' : String(count);
+  $('notificationsBtn').setAttribute('aria-label', count ? `Avisos, ${count} sin leer` : 'Avisos');
+}
+$('menuBtn').addEventListener('click', () => $('menuDrawer').showModal());
+// Cerrar el menú al elegir una opción o tocar fuera de él.
+$('menuDrawer').querySelectorAll('.drawer-nav button').forEach(button => button.addEventListener('click', () => $('menuDrawer').close()));
+$('menuDrawer').addEventListener('click', e => { if (e.target === $('menuDrawer')) $('menuDrawer').close(); });
 async function loadMyProfile() {
   if (!currentUser) return null;
   const userId = currentUser.id;
   const { data, error } = await db.from('profiles').select('*').eq('id', userId).maybeSingle();
   if (currentUser?.id !== userId) return null;
   if (error) { message('No pudimos cargar tu perfil: ' + displayError(error)); return null; }
-  myProfile = data; $('accountLabel').textContent = myProfile?.display_name || currentUser.email;
+  myProfile = data; showAccountInMenu();
   return myProfile;
 }
 async function loadItems() {
@@ -239,7 +253,47 @@ $('publishBtn').addEventListener('click', () => currentUser ? $('publishDialog')
 let offerDirection = 'received';
 let offerEntries = [];
 const statusLabels = { pending: 'Pendiente', accepted: 'Aceptada · Esperando confirmación', rejected: 'Rechazada', cancelled: 'Cancelada', completed: 'Permuta concretada', failed: 'No se concretó', abandoned: 'Cancelada por falta de respuesta', expired: 'Vencida' };
-function shortDate(value) { return new Date(value).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+function shortDate(value) { return new Date(value).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); }
+let myReviews = new Map();
+// Igual que trade_completed_at en la base: la última de las dos confirmaciones.
+function completedAt(offer) {
+  const responses = [offer.owner_responded_at, offer.sender_responded_at].filter(Boolean).map(d => new Date(d).getTime());
+  return responses.length ? Math.max(...responses) : new Date(offer.accepted_at || offer.updated_at).getTime();
+}
+function starsText(rating) { return '★'.repeat(rating) + '☆'.repeat(5 - rating); }
+function reviewBox(entry) {
+  const offer = entry.offer; const box = document.createElement('div'); box.className = 'trade-box';
+  const mine = myReviews.get(offer.id); const info = document.createElement('p');
+  const deadline = new Date(completedAt(offer) + 14 * 86400000);
+  if (mine) {
+    info.textContent = 'Calificaste con ' + starsText(mine.rating) + (mine.published_at ? '. Tu opinión ya es pública.' : '. Se publica cuando la otra parte califique o el ' + shortDate(deadline) + '.');
+    box.append(info); return box;
+  }
+  if (deadline <= new Date()) { info.textContent = 'Pasaron 14 días: ya no se puede calificar esta permuta.'; box.append(info); return box; }
+  info.textContent = '¿Cómo fue la permuta? Calificá a la otra persona antes del ' + shortDate(deadline) + '. Tu opinión se publica cuando las dos partes califiquen.';
+  const form = document.createElement('form'); form.className = 'form';
+  const stars = document.createElement('fieldset'); stars.className = 'stars';
+  const legend = document.createElement('legend'); legend.textContent = 'Estrellas'; stars.append(legend);
+  for (let i = 5; i >= 1; i--) {
+    const input = document.createElement('input'); input.type = 'radio'; input.name = 'rating'; input.value = i; input.id = `star-${offer.id}-${i}`; input.required = true;
+    const label = document.createElement('label'); label.htmlFor = input.id; label.textContent = '★'; label.title = i + (i === 1 ? ' estrella' : ' estrellas');
+    stars.append(input, label);
+  }
+  const comment = field('Comentario (opcional)', 'comment', 'textarea', 500, 'Ej. Muy amable y puntual.'); comment.querySelector('textarea').required = false;
+  const errorBox = document.createElement('p'); errorBox.className = 'error'; errorBox.hidden = true; errorBox.setAttribute('role', 'alert');
+  const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'primary'; submit.textContent = 'Enviar calificación';
+  form.append(stars, comment, errorBox, submit);
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); if (!currentUser) return; errorBox.hidden = true; submit.disabled = true;
+    try {
+      const d = new FormData(form);
+      const { error } = await db.rpc('submit_review', { offer_id: offer.id, rating: Number(d.get('rating')), comment: String(d.get('comment') || '') });
+      if (error) throw error;
+      await loadMyOffers(); loadNotificationCount();
+    } catch (error) { errorBox.textContent = displayError(error); errorBox.hidden = false; submit.disabled = false; }
+  });
+  box.append(info, form); return box;
+}
 function tradeBox(entry) {
   const offer = entry.offer; const mine = entry.direction === 'received' ? offer.owner_response : offer.sender_response;
   const theirs = entry.direction === 'received' ? offer.sender_response : offer.owner_response;
@@ -272,9 +326,10 @@ async function loadMyOffers() {
   if (!currentUser) return;
   const userId = currentUser.id; const box = $('offersList'); box.textContent = 'Cargando...';
   if (!$('offersDialog').open) $('offersDialog').showModal();
-  const { data, error } = await db.rpc('list_my_offers');
+  const [{ data, error }, reviewsRes] = await Promise.all([db.rpc('list_my_offers'), db.from('reviews').select('offer_id,rating,comment,published_at').eq('reviewer_id', userId)]);
   if (currentUser?.id !== userId) return;
   if (error) { box.textContent = displayError(error); return; }
+  myReviews = new Map((reviewsRes.data || []).map(r => [r.offer_id, r]));
   offerEntries = data || []; renderMyOffers();
 }
 function renderMyOffers() {
@@ -312,6 +367,7 @@ function renderMyOffers() {
       row.append(actions, errorBox);
     }
     if (offer.status === 'accepted') row.append(tradeBox(entry));
+    if (offer.status === 'completed') row.append(reviewBox(entry));
     const chatButton = document.createElement('button'); chatButton.type = 'button'; chatButton.className = 'primary'; chatButton.textContent = 'Abrir chat'; chatButton.addEventListener('click', () => openOfferChat(entry)); row.append(chatButton);
     box.append(row);
   }
@@ -583,13 +639,14 @@ async function openPublicProfile(userId) {
   const generation = ++publicProfileGeneration;
   const box = $('publicProfileContent'); box.textContent = 'Cargando perfil...';
   if (!$('publicProfileDialog').open) $('publicProfileDialog').showModal();
-  const [profileRes, statsRes, pubsRes] = await Promise.all([
+  const [profileRes, statsRes, pubsRes, reviewsRes] = await Promise.all([
     db.from('profiles').select('id,display_name,bio,province_id,locality_id,avatar_path,created_at').eq('id', userId).maybeSingle(),
     db.rpc('get_profile_stats', { target_user: userId }),
-    db.from('publications').select('*').eq('owner_id', userId).in('status', ['active', 'reserved', 'exchanged']).order('created_at', { ascending: false }).limit(60)
+    db.from('publications').select('*').eq('owner_id', userId).in('status', ['active', 'reserved', 'exchanged']).order('created_at', { ascending: false }).limit(60),
+    db.from('reviews').select('rating,comment,published_at,reviewer_id,reviewer:profiles!reviews_reviewer_id_fkey(display_name)').eq('reviewed_id', userId).not('published_at', 'is', null).order('published_at', { ascending: false }).limit(10)
   ]);
   if (generation !== publicProfileGeneration) return;
-  const error = profileRes.error || statsRes.error || pubsRes.error;
+  const error = profileRes.error || statsRes.error || pubsRes.error || reviewsRes.error;
   if (error) { box.textContent = 'No pudimos cargar el perfil: ' + displayError(error); return; }
   const profile = profileRes.data;
   if (!profile) { box.textContent = 'Este perfil ya no existe.'; return; }
@@ -609,7 +666,9 @@ async function openPublicProfile(userId) {
 
   const received = stats.offers_received || 0;
   const grid = document.createElement('div'); grid.className = 'stats';
+  const ratingCount = stats.rating_count || 0;
   grid.append(
+    statTile(ratingCount ? '★ ' + Number(stats.rating_avg).toLocaleString('es-AR', { minimumFractionDigits: 1 }) : '—', ratingCount ? ratingCount + (ratingCount === 1 ? ' calificación' : ' calificaciones') : 'Sin calificaciones todavía'),
     statTile(String(stats.completed_trades || 0), 'Permutas concretadas'),
     statTile(String(stats.active_publications || 0), 'Publicaciones disponibles'),
     statTile(received ? Math.round((stats.offers_answered || 0) / received * 100) + '%' : '—', received ? 'Responde las propuestas que recibe' : 'Todavía no recibió propuestas'),
@@ -639,6 +698,19 @@ async function openPublicProfile(userId) {
   }
   showTab(0);
   box.append(tabs, list);
+
+  const reviews = reviewsRes.data || [];
+  const reviewsTitle = document.createElement('h3'); reviewsTitle.textContent = 'Opiniones'; box.append(reviewsTitle);
+  if (!reviews.length) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = 'Todavía no tiene opiniones.'; box.append(p); }
+  for (const review of reviews) {
+    const row = document.createElement('article'); row.className = 'review';
+    const head = document.createElement('p'); const stars = document.createElement('span'); stars.className = 'review-stars'; stars.textContent = starsText(review.rating); stars.setAttribute('aria-label', review.rating + ' de 5 estrellas');
+    head.append(stars, ' · ', ownerLink(review.reviewer?.display_name, review.reviewer_id));
+    const time = document.createElement('time'); time.className = 'hint'; time.dateTime = review.published_at; time.textContent = new Date(review.published_at).toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' });
+    row.append(head);
+    if (review.comment) { const c = document.createElement('p'); c.textContent = review.comment; row.append(c); }
+    row.append(time); box.append(row);
+  }
 }
 
 async function loadNotificationCount() {
@@ -646,7 +718,7 @@ async function loadNotificationCount() {
   const userId = currentUser.id;
   const { count, error } = await db.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null);
   if (error || currentUser?.id !== userId) return;
-  $('notificationsBtn').textContent = count ? `Avisos (${count})` : 'Avisos';
+  showNotificationCount(count || 0);
 }
 async function openOffersFor(offerId) {
   await loadMyOffers();

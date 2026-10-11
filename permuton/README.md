@@ -2,6 +2,14 @@
 
 La app usa Supabase Auth, PostgreSQL y Storage. Las publicaciones y propuestas quedan disponibles entre dispositivos. No incluye pagos ni chat en esta etapa.
 
+## Actualización: calificaciones y menú lateral
+
+Ejecutá `migration-09-reviews.sql` una vez en SQL Editor después de migration-08, antes de reemplazar `dist/index.html` y `dist/app.js`. La última línea programa otra tarea automática con Cron (cada hora); si falla, ejecutala sola una vez que Cron esté activo.
+
+- **Calificaciones:** al concretarse una permuta, las dos partes reciben "Calificá a…". Cada una califica a la otra una sola vez, de 1 a 5 estrellas con comentario opcional, desde Mis propuestas. La opinión se publica cuando califican las dos o a los 14 días de concretada (lo que pase primero); hasta entonces solo la ve quien la escribió. Recordatorio a los 3 días; pasados 14 días ya no se puede calificar.
+- **Perfil público:** promedio de estrellas, cantidad de calificaciones y las últimas 10 opiniones.
+- **Encabezado:** las opciones de cuenta (Mis publicaciones, Mis propuestas, Mi perfil, Salir, Ingresar) pasan a un menú lateral que se abre con el botón ☰ a la izquierda. En el encabezado quedan solo Avisos (campana con contador) y Publicar.
+
 ## Actualización: confirmación de permutas, avisos y vencimiento
 
 Ejecutá `migration-08-trade-confirmation.sql` una vez en SQL Editor después de migration-07, **antes** de reemplazar `dist/index.html` y `dist/app.js` (sin la migración, el catálogo no carga). Las últimas dos líneas del archivo activan una tarea automática con Cron cada 15 minutos; si fallan, activá Cron en **Supabase > Integrations > Cron** y ejecutá solo esas dos líneas.
