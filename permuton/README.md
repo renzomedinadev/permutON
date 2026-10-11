@@ -2,6 +2,20 @@
 
 La app usa Supabase Auth, PostgreSQL y Storage. Las publicaciones y propuestas quedan disponibles entre dispositivos. No incluye pagos ni chat en esta etapa.
 
+## Actualización: bloquear, reportar y moderación
+
+Ejecutá `migration-10-moderation.sql` una vez en SQL Editor después de migration-09, antes de reemplazar `dist/index.html` y `dist/app.js`.
+
+Para hacerte administrador, ejecutá una sola vez en SQL Editor (con tu email; no lo guardes en el repositorio):
+
+```sql
+insert into public.admins (user_id) select id from auth.users where email = 'TU_EMAIL';
+```
+
+- **Bloquear:** desde el perfil de alguien. La persona bloqueada no puede enviarte propuestas ni escribirte, sus propuestas pendientes se cierran y vos dejás de ver sus publicaciones. No se le avisa. Se desbloquea desde el mismo perfil o en Mi perfil > Personas bloqueadas.
+- **Reportar:** desde un perfil (usuario) o el detalle de una publicación, con motivo y detalle opcional; una vez por motivo. Con 3 reportes abiertos de personas distintas, la publicación se oculta sola hasta que se revise.
+- **Moderación:** los administradores ven *Moderación* en el menú ☰ (con contador de reportes abiertos) y reciben un aviso por cada reporte. Pueden descartar, ocultar o volver a mostrar una publicación, y suspender o reactivar una cuenta. Una cuenta suspendida no puede publicar, proponer ni chatear, y sus publicaciones quedan ocultas.
+
 ## Actualización: calificaciones y menú lateral
 
 Ejecutá `migration-09-reviews.sql` una vez en SQL Editor después de migration-08, antes de reemplazar `dist/index.html` y `dist/app.js`. La última línea programa otra tarea automática con Cron (cada hora); si falla, ejecutala sola una vez que Cron esté activo.

@@ -4,6 +4,7 @@ const configured = /^https:\/\/.+\.supabase\.co$/.test(cfg.supabaseUrl || '') &&
 const db = configured && window.supabase?.createClient(cfg.supabaseUrl, cfg.supabasePublishableKey);
 let currentUser = null;
 let myProfile = null;
+let isAdmin = false;
 let items = [];
 let authMode = 'login';
 const previewUrls = new Map();
@@ -85,8 +86,8 @@ function updateAccount() {
   showAccountInMenu();
   $('logoutDivider').hidden = !signed;
   $('authBtn').hidden = signed; $('logoutBtn').hidden = !signed; $('offersBtn').hidden = !signed; $('myPublicationsBtn').hidden = !signed; $('profileBtn').hidden = !signed; $('notificationsBtn').hidden = !signed;
-  if (signed) { loadMyProfile(); loadNotificationCount(); }
-  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog', 'notificationsDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); $('notificationsList').replaceChildren(); showNotificationCount(0); }
+  if (signed) { loadMyProfile(); loadNotificationCount(); checkAdmin(); } else { isAdmin = false; $('moderationBtn').hidden = true; $('accountNotice').hidden = true; }
+  if (!signed) { stopChat(); if ($('chatDialog').open) $('chatDialog').close(); $('chatMessages').replaceChildren(); offerEntries = []; for (const id of ['myPublicationsDialog', 'editPublicationDialog', 'offersDialog', 'publishDialog', 'detailDialog', 'profileDialog', 'notificationsDialog', 'reportDialog', 'moderationDialog']) { if ($(id).open) $(id).close(); } $('myPublicationsList').replaceChildren(); $('offersList').replaceChildren(); $('profileContent').replaceChildren(); $('notificationsList').replaceChildren(); showNotificationCount(0); }
 }
 function showAccountInMenu() {
   $('accountLabel').textContent = currentUser ? (myProfile?.display_name || 'Mi cuenta') : 'Invitado';
@@ -108,6 +109,8 @@ async function loadMyProfile() {
   if (currentUser?.id !== userId) return null;
   if (error) { message('No pudimos cargar tu perfil: ' + displayError(error)); return null; }
   myProfile = data; showAccountInMenu();
+  $('accountNotice').hidden = !myProfile?.suspended_at;
+  $('accountNotice').textContent = myProfile?.suspended_at ? 'Tu cuenta está suspendida por incumplir las reglas de permutON: no podés publicar, proponer ni chatear.' : '';
   return myProfile;
 }
 async function loadItems() {
@@ -161,10 +164,18 @@ function openDetail(item) {
   const title = document.createElement('h2'); title.textContent = item.title;
   const meta = document.createElement('p'); meta.append(item.category + ' · Publicado por ', ownerLink(item.owner_name, item.owner_id));
   const desc = document.createElement('p'); desc.textContent = item.description;
-  box.append(title, meta, gallery(pathsFor(item), item.title), detailLine('Ubicación: ', locationText(item)), desc, detailLine('Lo tiene desde: ', item.owned_time), detailLine('Motivo de publicación: ', item.reason), detailLine('Busca a cambio: ', item.wanted));
+  box.append(title, meta);
+  if (item.hidden_at) { const hidden = document.createElement('p'); hidden.className = 'warning'; hidden.textContent = item.hidden_reason === 'reports' ? 'Oculta por acumular reportes, pendiente de revisión.' : 'Oculta por moderación.'; box.append(hidden); }
+  if (currentUser?.id !== item.owner_id) {
+    const actions = document.createElement('div'); actions.className = 'profile-actions';
+    const report = document.createElement('button'); report.type = 'button'; report.className = 'link-btn danger-link'; report.textContent = 'Reportar publicación';
+    report.addEventListener('click', () => openReport({ publicationId: item.id, name: item.title }));
+    actions.append(report); box.append(actions);
+  }
+  box.append(gallery(pathsFor(item), item.title), detailLine('Ubicación: ', locationText(item)), desc, detailLine('Lo tiene desde: ', item.owned_time), detailLine('Motivo de publicación: ', item.reason), detailLine('Busca a cambio: ', item.wanted));
   if (currentUser?.id === item.owner_id) {
-    const own = document.createElement('p'); own.className = 'success'; own.textContent = 'Esta es tu publicación. Las propuestas recibidas están en el botón Propuestas.'; box.append(own);
-  } else if (item.status !== 'active') {
+    const own = document.createElement('p'); own.className = 'success'; own.textContent = 'Esta es tu publicación. Las propuestas recibidas están en Mis propuestas.'; box.append(own);
+  } else if (item.status !== 'active' || item.hidden_at) {
     const closed = document.createElement('p'); closed.className = 'success'; closed.textContent = 'Este artículo ya no está disponible para permutar (' + (publicationStatusLabels[item.status] || item.status).toLowerCase() + ').'; box.append(closed);
   } else {
     const form = document.createElement('form'); form.className = 'form';
@@ -474,6 +485,7 @@ async function openMyPublications() {
     const h = document.createElement('h3'); h.textContent = item.title;
     const expired = item.status === 'active' && new Date(item.expires_at) <= new Date();
     const status = document.createElement('p'); status.textContent = item.status === 'reserved' ? 'Permuta aceptada · Esperando la confirmación de las dos partes' : item.status === 'exchanged' ? 'Permutada' : expired ? 'Vencida · Los demás no la ven. Renovala para volver a ofrecerla.' : 'Activa · Vence el ' + shortDate(item.expires_at);
+    if (item.hidden_at) { status.className = 'warning'; status.textContent = 'Oculta por moderación · Los demás no la ven.' + (item.hidden_reason === 'reports' ? ' Recibió varios reportes y está pendiente de revisión.' : ''); }
     const actions = document.createElement('div'); actions.className = 'manage-actions';
     const edit = document.createElement('button'); edit.textContent = 'Editar'; edit.addEventListener('click', () => openEditPublication(item));
     const renew = document.createElement('button'); renew.textContent = 'Renovar 2 semanas'; renew.hidden = item.status !== 'active';
@@ -613,6 +625,24 @@ async function openMyProfile() {
   });
   $('profileDialog').addEventListener('close', () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = null; }, { once: true });
   box.append(heading, intro, head, form);
+  const blockedTitle = document.createElement('h3'); blockedTitle.textContent = 'Personas bloqueadas';
+  const blockedList = document.createElement('div'); blockedList.className = 'hint'; blockedList.textContent = 'Cargando...';
+  box.append(blockedTitle, blockedList);
+  const { data: blocks, error: blocksError } = await db.from('blocks').select('blocked_id,blocked:profiles!blocks_blocked_id_fkey(display_name)').eq('blocker_id', userId).order('created_at', { ascending: false });
+  if (currentUser?.id !== userId) return;
+  blockedList.replaceChildren();
+  if (blocksError) { blockedList.textContent = displayError(blocksError); return; }
+  if (!blocks.length) { blockedList.textContent = 'No bloqueaste a nadie.'; return; }
+  for (const b of blocks) {
+    const row = document.createElement('p'); const unblock = document.createElement('button'); unblock.type = 'button'; unblock.className = 'link-btn'; unblock.textContent = 'Desbloquear';
+    unblock.addEventListener('click', async () => {
+      unblock.disabled = true;
+      const { error } = await db.from('blocks').delete().eq('blocker_id', userId).eq('blocked_id', b.blocked_id);
+      if (error) { alert(displayError(error)); unblock.disabled = false; return; }
+      row.remove(); loadItems(); if (!blockedList.childElementCount) blockedList.textContent = 'No bloqueaste a nadie.';
+    });
+    row.append(ownerLink(b.blocked?.display_name, b.blocked_id), ' · ', unblock); blockedList.append(row);
+  }
 }
 $('profileBtn').addEventListener('click', openMyProfile);
 
@@ -633,6 +663,27 @@ function statTile(value, label) {
   const strong = document.createElement('strong'); strong.textContent = value; const span = document.createElement('span'); span.textContent = label;
   tile.append(strong, span); return tile;
 }
+function profileActions(profile) {
+  const actions = document.createElement('div'); actions.className = 'profile-actions';
+  const report = document.createElement('button'); report.type = 'button'; report.className = 'link-btn danger-link'; report.textContent = 'Reportar usuario';
+  report.addEventListener('click', () => openReport({ userId: profile.id, name: profile.display_name }));
+  const block = document.createElement('button'); block.type = 'button'; block.className = 'link-btn'; block.hidden = !currentUser; block.textContent = 'Bloquear';
+  let blocked = false;
+  const show = () => { block.textContent = blocked ? 'Desbloquear' : 'Bloquear'; };
+  if (currentUser) db.from('blocks').select('blocked_id').eq('blocker_id', currentUser.id).eq('blocked_id', profile.id).maybeSingle().then(({ data }) => { blocked = !!data; show(); });
+  block.addEventListener('click', async () => {
+    if (!currentUser) return;
+    if (!blocked && !confirm(`¿Bloquear a ${profile.display_name}? No va a poder enviarte propuestas ni escribirte, y dejás de ver sus publicaciones. No se le avisa.`)) return;
+    block.disabled = true;
+    try {
+      const { error } = blocked ? await db.from('blocks').delete().eq('blocker_id', currentUser.id).eq('blocked_id', profile.id) : await db.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: profile.id });
+      if (error) throw error;
+      blocked = !blocked; show(); loadItems();
+    } catch (error) { alert(displayError(error)); }
+    finally { block.disabled = false; }
+  });
+  actions.append(report, block); return actions;
+}
 let publicProfileGeneration = 0;
 async function openPublicProfile(userId) {
   if (!db || !userId) return;
@@ -640,7 +691,7 @@ async function openPublicProfile(userId) {
   const box = $('publicProfileContent'); box.textContent = 'Cargando perfil...';
   if (!$('publicProfileDialog').open) $('publicProfileDialog').showModal();
   const [profileRes, statsRes, pubsRes, reviewsRes] = await Promise.all([
-    db.from('profiles').select('id,display_name,bio,province_id,locality_id,avatar_path,created_at').eq('id', userId).maybeSingle(),
+    db.from('profiles').select('id,display_name,bio,province_id,locality_id,avatar_path,created_at,suspended_at').eq('id', userId).maybeSingle(),
     db.rpc('get_profile_stats', { target_user: userId }),
     db.from('publications').select('*').eq('owner_id', userId).in('status', ['active', 'reserved', 'exchanged']).order('created_at', { ascending: false }).limit(60),
     db.from('reviews').select('rating,comment,published_at,reviewer_id,reviewer:profiles!reviews_reviewer_id_fkey(display_name)').eq('reviewed_id', userId).not('published_at', 'is', null).order('published_at', { ascending: false }).limit(10)
@@ -662,7 +713,9 @@ async function openPublicProfile(userId) {
   if (activity) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = activity; info.append(p); }
   head.append(avatarImage(profile), info); box.append(head);
   if (profile.bio) { const bio = document.createElement('p'); bio.textContent = profile.bio; box.append(bio); }
+  if (profile.suspended_at) { const s = document.createElement('p'); s.className = 'warning'; s.textContent = 'Esta cuenta está suspendida por incumplir las reglas de permutON.'; box.append(s); }
   if (currentUser?.id === profile.id) { const own = document.createElement('p'); own.className = 'success'; own.textContent = 'Así ven tu perfil las demás personas.'; box.append(own); }
+  else box.append(profileActions(profile));
 
   const received = stats.offers_received || 0;
   const grid = document.createElement('div'); grid.className = 'stats';
@@ -750,6 +803,97 @@ async function openNotifications() {
 }
 $('notificationsBtn').addEventListener('click', openNotifications);
 setInterval(() => { if (currentUser && !document.hidden) loadNotificationCount(); }, 30000);
+
+const reportReasons = { scam: 'Estafa o intento de estafa', fake_listing: 'Publicación falsa o engañosa', prohibited: 'Artículo prohibido', offensive: 'Trato ofensivo o acoso', spam: 'Spam', other: 'Otro motivo' };
+function openReport({ userId = null, publicationId = null, name }) {
+  if (!currentUser) { openAuth(); return; }
+  const box = $('reportContent'); box.replaceChildren();
+  const heading = document.createElement('h2'); heading.textContent = publicationId ? 'Reportar publicación' : 'Reportar usuario';
+  const intro = document.createElement('p'); intro.textContent = `Vas a reportar ${publicationId ? 'la publicación' : 'a'} “${name}”. La persona no sabrá quién la reportó.`;
+  const form = document.createElement('form'); form.className = 'form';
+  const reasonLabel = document.createElement('label'); reasonLabel.textContent = 'Motivo';
+  const reason = document.createElement('select'); reason.name = 'reason'; reason.required = true; reason.append(new Option('Seleccionar', ''));
+  Object.entries(reportReasons).forEach(([value, label]) => reason.append(new Option(label, value))); reasonLabel.append(reason);
+  const details = field('Detalle (opcional)', 'details', 'textarea', 500, 'Contanos qué pasó.'); details.querySelector('textarea').required = false;
+  const errorBox = document.createElement('p'); errorBox.className = 'error'; errorBox.hidden = true; errorBox.setAttribute('role', 'alert');
+  const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'primary'; submit.textContent = 'Enviar reporte';
+  form.append(reasonLabel, details, errorBox, submit);
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); errorBox.hidden = true; submit.disabled = true;
+    try {
+      const { error } = await db.rpc('submit_report', { target_user: userId, publication: publicationId, reason: reason.value, details: form.elements.namedItem('details').value });
+      if (error) throw error;
+      const done = document.createElement('p'); done.className = 'success'; done.textContent = 'Gracias. Recibimos tu reporte y lo vamos a revisar.'; form.replaceWith(done);
+      if (publicationId) loadItems();
+    } catch (error) { errorBox.textContent = displayError(error); errorBox.hidden = false; submit.disabled = false; }
+  });
+  box.append(heading, intro, form); $('reportDialog').showModal();
+}
+
+let moderationView = 'open';
+async function checkAdmin() {
+  if (!currentUser) return;
+  const userId = currentUser.id;
+  const { data } = await db.from('admins').select('user_id').eq('user_id', userId).maybeSingle();
+  if (currentUser?.id !== userId) return;
+  isAdmin = !!data; $('moderationBtn').hidden = !isAdmin;
+  if (isAdmin) loadOpenReportCount();
+}
+async function loadOpenReportCount() {
+  if (!isAdmin) return;
+  const { count } = await db.from('reports').select('id', { count: 'exact', head: true }).eq('status', 'open');
+  $('moderationBadge').hidden = !count; $('moderationBadge').textContent = String(count || 0);
+}
+async function openModeration() {
+  if (!isAdmin) return;
+  const box = $('moderationList'); box.textContent = 'Cargando...';
+  if (!$('moderationDialog').open) $('moderationDialog').showModal();
+  $('openReportsBtn').setAttribute('aria-pressed', String(moderationView === 'open'));
+  $('closedReportsBtn').setAttribute('aria-pressed', String(moderationView !== 'open'));
+  let query = db.from('reports').select('*, reporter:profiles!reports_reporter_id_fkey(display_name), target:profiles!reports_target_user_id_fkey(display_name,suspended_at), publication:publications(*)');
+  query = moderationView === 'open' ? query.eq('status', 'open') : query.neq('status', 'open');
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(50);
+  if (error) { box.textContent = displayError(error); return; }
+  box.replaceChildren(); loadOpenReportCount();
+  if (!data.length) { box.textContent = moderationView === 'open' ? 'No hay reportes abiertos. 🎉' : 'Todavía no resolviste reportes.'; return; }
+  for (const r of data) {
+    const row = document.createElement('article'); row.className = 'report-row';
+    const top = document.createElement('p'); const pill = document.createElement('span'); pill.className = 'tag-pill' + (r.reason === 'scam' || r.reason === 'offensive' ? ' alert' : ''); pill.textContent = reportReasons[r.reason] || r.reason;
+    top.append(pill, ' ' + shortDate(r.created_at) + (r.status !== 'open' ? ' · ' + (r.status === 'actioned' ? 'Con medidas' : 'Descartado') : ''));
+    const who = document.createElement('p'); who.append('Reportó ', ownerLink(r.reporter?.display_name, r.reporter_id), ' a ', ownerLink(r.target?.display_name, r.target_user_id));
+    if (r.target?.suspended_at) who.append(' (suspendido)');
+    row.append(top, who);
+    if (r.details) { const d = document.createElement('p'); d.textContent = '“' + r.details + '”'; row.append(d); }
+    if (r.publication) {
+      const pub = document.createElement('p'); const open = document.createElement('button'); open.type = 'button'; open.className = 'link-btn'; open.textContent = r.publication.title; open.addEventListener('click', () => openDetail(r.publication));
+      pub.append('Publicación: ', open, r.publication.hidden_at ? ' (oculta)' : ''); row.append(pub);
+    }
+    const actions = document.createElement('div'); actions.className = 'manage-actions';
+    const act = (label, fn, args, confirmText, danger) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label; if (danger) b.className = 'danger';
+      b.addEventListener('click', async () => {
+        if (confirmText && !confirm(confirmText)) return;
+        actions.querySelectorAll('button').forEach(x => x.disabled = true);
+        const { error } = await db.rpc(fn, args);
+        if (error) { alert(displayError(error)); actions.querySelectorAll('button').forEach(x => x.disabled = false); return; }
+        loadItems(); openModeration();
+      });
+      actions.append(b);
+    };
+    if (r.status === 'open') act('Descartar', 'admin_dismiss_report', { report_id: r.id });
+    if (r.publication) r.publication.hidden_at
+      ? act('Mostrar publicación', 'admin_set_publication_hidden', { publication_id: r.publication.id, hidden: false }, '¿Volver a mostrar la publicación? Se descartan sus reportes abiertos.')
+      : act('Ocultar publicación', 'admin_set_publication_hidden', { publication_id: r.publication.id, hidden: true }, '¿Ocultar esta publicación? Se avisa al dueño.', true);
+    r.target?.suspended_at
+      ? act('Quitar suspensión', 'admin_set_user_suspended', { target_user: r.target_user_id, suspended: false }, `¿Reactivar la cuenta de ${r.target?.display_name}?`)
+      : act('Suspender usuario', 'admin_set_user_suspended', { target_user: r.target_user_id, suspended: true }, `¿Suspender a ${r.target?.display_name}? No podrá publicar, proponer ni chatear, y sus publicaciones se ocultan.`, true);
+    row.append(actions); box.append(row);
+  }
+}
+$('moderationBtn').addEventListener('click', openModeration);
+$('openReportsBtn').addEventListener('click', () => { moderationView = 'open'; openModeration(); });
+$('closedReportsBtn').addEventListener('click', () => { moderationView = 'closed'; openModeration(); });
+setInterval(() => { if (isAdmin && !document.hidden) loadOpenReportCount(); }, 60000);
 
 // Mantener el catálogo al día cuando otros usuarios aceptan permutas.
 setInterval(() => { if (db && !document.hidden) loadItems(); }, 15000);
